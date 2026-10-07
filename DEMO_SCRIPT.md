@@ -25,7 +25,8 @@ Setup before recording:
 | 13 | 1:09 | Ctrl: fingers up, thumb tucked | Text selected first | Ctrl+C |
 | 14 | 1:13 | Ctrl: only index up | | Ctrl+V pastes |
 | 15 | 1:17 | Ctrl: only pinky up | | Ctrl+Z undoes |
-| 16 | 1:21 | Ctrl: rock sign | | Enter |
+| 16 | 1:21 | Ctrl: rock sign, hold still 2 s | | Enter |
+| 16b | 1:24 | Ctrl lock: rock sign, then move hand | Point at a window, open hand | Switcher opens, cursor live, picks window |
 | 17 | 1:25 | Back to open hand neutral, then upright | | Back to normal cursor |
 | 18 | 1:28 | Flat palm down + curl fingertips, hold 0.5 s | Over a spare window | Window closes |
 | 19 | 1:33 | Thumbs-up, wave | End shot | Freeze, clean outro |

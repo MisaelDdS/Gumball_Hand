@@ -27,7 +27,8 @@ CHEATS = [  # (gesture, what it does); None = divider
     ("   index up", "Ctrl+V"),
     ("   pinky up", "Ctrl+Z"),
     ("   thumb up", "Ctrl+D"),
-    ("   rock sign", "Enter"),
+    ("   rock still 2 s", "Enter"),
+    ("   rock + move", "switcher"),
 ]
 
 user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
