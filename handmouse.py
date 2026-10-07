@@ -637,10 +637,15 @@ def main(control):
                 target = (m.x + u * (m.width - 1), m.y + v * (m.height - 1))
                 if cur is None or live:
                     cur = target
+                free = ctrl_lock and not sw  # Ctrl lock: hands off the cursor, the real mouse drives it
+                if free:
+                    pt = wintypes.POINT()
+                    user32.GetCursorPos(ctypes.byref(pt))
+                    cur = (pt.x, pt.y)  # minimize / close aim at wherever the real mouse is
                 hist.append((now, *cur))
                 if pointing:  # only warn while the hand is steering the cursor
                     sides = edge_sides([(p.x, p.y) for p in lm])
-                if control:
+                if control and not free:
                     user32.SetCursorPos(int(cur[0]), int(cur[1]))
 
                 # fist: minimize the window the cursor was on just before the curl dragged it away
