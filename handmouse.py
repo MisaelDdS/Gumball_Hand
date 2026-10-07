@@ -9,8 +9,9 @@ Thumbs-up held LOCK_HOLD s = Ctrl lock on/off: Ctrl mode stays on with the norma
 While locked, Ctrl+D fires when a short thumbs-up is released (holding it is the unlock).
 Ctrl mode: hold the hand angle captured by --ctrl. Cursor and clicks pause; from neutral,
 fingers up + thumb tucked across the palm = Ctrl+C, only index up = Ctrl+V, only pinky up = Ctrl+Z,
-only thumb straight up = Ctrl+D, rock sign held still ENTER_HOLD s = Enter (no Ctrl);
-rock sign moved = window switcher, cursor live only while it is open. Back to neutral (open hand, thumb out) to re-arm.
+only thumb straight up = Ctrl+D, short rock sign = Enter on release (no Ctrl);
+rock sign held SWITCH_HOLD s = window switcher, cursor live only while it is open.
+Ctrl lock also allows fist = minimize and flat + curl = close. Back to neutral (open hand, thumb out) to re-arm.
 
 python handmouse.py          control the mouse + preview window
 python handmouse.py --view   preview only, mouse untouched
@@ -65,8 +66,7 @@ CTRL_MIN_MATCH = 0.30  # floor for the captured threshold: thumb moves and fists
 CTRL_LOOSEN = 1.0    # multiply the captured threshold: >1 = Ctrl mode easier to enter, <1 = stricter
 CTRL_EXIT = 0.15     # s off the Ctrl pose before Ctrl mode ends (a few frames, so one bad frame doesn't drop it)
 CTRL_LOOKBACK = 0.3  # s: on entering Ctrl mode, snap the cursor back to before the hand started turning
-ENTER_HOLD = 2.0     # s Ctrl-mode rock sign must hold still before Enter fires
-ROCK_STILL = 0.04    # box fraction the index may drift during that hold; more = window switcher instead
+SWITCH_HOLD = 2.0    # s Ctrl-mode rock sign must hold to open the switcher; shorter = Enter on release
 SHELL = {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"}  # never minimize these
 
 # MediaPipe hand landmark ids
@@ -222,13 +222,6 @@ def ctrl_move(ext, thumb_out, thumb_straight_up):
     return None
 
 
-def rock_ctrl(held, drift):
-    """Ctrl-mode rock sign -> 'switch' (hand moved), 'enter' (held still ENTER_HOLD s) or None (still waiting)."""
-    if drift > ROCK_STILL:
-        return "switch"
-    return "enter" if held >= ENTER_HOLD else None
-
-
 def selftest():
     def run(seq):
         g, out = Gestures(), []
@@ -263,7 +256,6 @@ def selftest():
     bent = [(0, 0)] * 2 + [(.5, .5), (.5, .4), (.6, .4)] + [(0, 0)] * 16  # tip bent sideways at the last joint
     side = [(0, 0)] * 2 + [(.5, .5), (.6, .5), (.7, .5)] + [(0, 0)] * 16  # straight but pointing sideways
     assert thumb_up(up) and not thumb_up(bent) and not thumb_up(side)
-    assert rock_ctrl(.5, .01) is None and rock_ctrl(2.1, .01) == "enter" and rock_ctrl(.5, .1) == "switch"
     assert ctrl_move([True, False, False, False], False, False) == "ctrl+v"
     assert ctrl_move([True, False, False, True], False, False) == "enter"
     assert ctrl_move([False, False, False, True], True, False) == "ctrl+z"
@@ -517,7 +509,6 @@ def main(control):
     scroll_y = scroll_acc = 0.0
     fps_t, fps = time.monotonic(), 0.0
     pose_raw, pose_t, fist_done, sw = "point", 0.0, False, False  # sw: Alt+Tab switcher open
-    rock_uv, rock_drift = None, 0.0  # where the rock sign started, how far the index moved since
     hist = deque(maxlen=90)  # recent (t, x, y) cursor positions, for the fist/freeze lookback
     fx, fy, prev_uv, off = OneEuro(), OneEuro(), None, (0.0, 0.0)
     ctrl = json.loads(CTRL_FILE.read_text()) if CTRL_FILE.exists() else None
@@ -598,7 +589,7 @@ def main(control):
                 # pinches and the cursor only count in the normal / fine pose
                 # close: hand tipped flat freezes the cursor; flat + fingertips curled CLOSE_HOLD s -> close window
                 was_flat = flat
-                flat, curled = flat_curl([(p.x, p.y) for p in lm]) if not (ctrl_mode or sw) else (False, False)
+                flat, curled = flat_curl([(p.x, p.y) for p in lm]) if not ((ctrl_mode and not ctrl_lock) or sw) else (False, False)
                 if flat and not was_flat and cur:  # undo the drift from tipping the hand
                     cur = cursor_at(now - CTRL_LOOKBACK)
                 if flat and curled:
@@ -640,12 +631,6 @@ def main(control):
                         k = max(0.0, 1 - CATCHUP * math.hypot(du, dv))
                         off = (off[0] * k, off[1] * k)
                 prev_uv = (fu, fv)
-                if pose_raw == "rock":  # Ctrl mode: still rock = Enter, moved rock = switcher
-                    rock_uv = rock_uv or (fu, fv)
-                    rock_drift = max(rock_drift, math.hypot(fu - rock_uv[0], fv - rock_uv[1]))
-                else:
-                    rock_uv, rock_drift = None, 0.0
-                rock = rock_ctrl(now - pose_t, rock_drift) if pose_raw == "rock" else None
                 u = min(max(fu + off[0], 0), 1)
                 v = min(max(fv + off[1], 0), 1)
                 m = mons[mon_i]
@@ -659,7 +644,7 @@ def main(control):
                     user32.SetCursorPos(int(cur[0]), int(cur[1]))
 
                 # fist: minimize the window the cursor was on just before the curl dragged it away
-                if stable == "fist" and not fist_done and not sw and not ctrl_mode and not flat:
+                if stable == "fist" and not fist_done and not sw and (ctrl_lock or not ctrl_mode) and not flat:
                     fist_done = True
                     x, y = cursor_at(pose_t - FIST_LOOKBACK)
                     say("minimize")
@@ -681,7 +666,7 @@ def main(control):
                         if control:
                             key("esc")
                         sw = False
-                elif stable == "rock" and not flat and (not ctrl_mode or rock == "switch"):
+                elif stable == "rock" and not flat and (not ctrl_mode or now - pose_t >= SWITCH_HOLD):
                     sw, move_done = True, True  # Ctrl mode: back to neutral before the next move
                     say("switcher open")
                     if control:
@@ -690,7 +675,7 @@ def main(control):
                 ext = extended(lm)
 
                 # Ctrl mode: pose (ctrl_move) -> Ctrl+letter once; back to neutral re-arms
-                if ctrl_mode and not sw:  # switcher owns the hand while open
+                if ctrl_mode and not sw and not flat:  # switcher / close own the hand while active
                     move = ctrl_move(ext, r_tuck > THUMB_OUT, thumb_up([(p.x, p.y) for p in lm]))
                     # locked: thumbs-up is also the unlock, so Ctrl+D waits for a short one to be released
                     hold_d = ctrl_lock and move_raw == "ctrl+d"
@@ -700,15 +685,16 @@ def main(control):
                             say("ctrl+d")
                             if control:
                                 key("ctrl", "d")
+                        if move_raw == "enter" and THUMB_HOLD < now - move_t < SWITCH_HOLD and not move_done:
+                            move_done = True  # short rock sign; a long one opens the switcher instead
+                            say("enter")
+                            if control:
+                                key("enter")
                         move_raw, move_t = move, now
                     if move_raw == "neutral":
                         move_done = False
                     elif move_raw == "enter":
-                        if rock == "enter" and not move_done:
-                            move_done = True
-                            say("enter")
-                            if control:
-                                key("enter")
+                        pass  # fires on release, above
                     elif move_raw and now - move_t > THUMB_HOLD and not move_done and not (ctrl_lock and move_raw == "ctrl+d"):
                         move_done = True  # once per move
                         say(move_raw)

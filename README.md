@@ -26,8 +26,9 @@ Index tip moves the cursor. Pinches click, drag and scroll. Poses minimize, clos
 | Ctrl pose + index only | Ctrl+V |
 | Ctrl pose + pinky only | Ctrl+Z |
 | Ctrl pose + thumb straight up | Ctrl+D |
-| Ctrl pose + rock sign, still 2 s | Enter |
-| Ctrl pose + rock sign, move | Window switcher (works in Ctrl lock) |
+| Ctrl pose + rock sign | Enter |
+| Ctrl pose + rock sign, hold 2 s | Window switcher (works in Ctrl lock) |
+| Ctrl lock + fist / flat + curl | Minimize / close still work |
 
 ## Install (Windows, Python 3.10+)
 
