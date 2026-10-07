@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HandMouse Technical Breakdown</title>
+<style>
+:root{--bg:#0b0d14;--fg:#e6e8f0;--mut:#8a90a6;--card:#141826;--line:#232a3d;--acc:#5a96ff;--ok:#50dc8c}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--bg:#f6f7fb;--fg:#141826;--mut:#5a6075;--card:#fff;--line:#dde1ec;--acc:#2f6fe0;--ok:#1a9a55}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,Segoe UI,sans-serif}
+main{max-width:860px;margin:auto;padding:48px 16px}
+h1{font-size:2.4rem;margin:0 0 4px}h2{margin-top:48px;border-bottom:1px solid var(--line);padding-bottom:6px}
+.sub{color:var(--mut);margin:0 0 24px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card b{display:block;color:var(--acc);font-size:1.4rem}
+table{width:100%;border-collapse:collapse;font-size:.95rem}td,th{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+code{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:.9em}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.flow span{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.flow i{color:var(--mut);font-style:normal}
+.tbl{overflow-x:auto}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<main>
+<h1>HandMouse</h1>
+<p class="sub">Webcam hand-gesture control for Windows. One hand. No extra hardware. Fully local.</p>
+
+<div class="grid">
+<div class="card"><b>21</b>hand landmarks / frame</div>
+<div class="card"><b>16</b>gestures mapped</div>
+<div class="card"><b>~950</b>lines of Python</div>
+<div class="card"><b>0</b>bytes sent online</div>
+</div>
+
+<h2>Pipeline</h2>
+<div class="flow">
+<span>Webcam (OpenCV)</span><i>→</i><span>MediaPipe HandLandmarker</span><i>→</i><span>Feature extraction</span><i>→</i><span>One Euro filter</span><i>→</i><span>Gesture state machines</span><i>→</i><span>Win32 input</span><i>→</i><span>Status widget</span>
+</div>
+
+<h2>Tech stack</h2>
+<div class="tbl"><table>
+<tr><th>Layer</th><th>Tool</th><th>Role</th></tr>
+<tr><td>Vision</td><td>MediaPipe Tasks (HandLandmarker)</td><td>Detects hand, returns 21 3D landmarks</td></tr>
+<tr><td>Capture</td><td>OpenCV</td><td>Webcam frames, mirrored preview</td></tr>
+<tr><td>Smoothing</td><td>One Euro filter (custom, ~10 lines)</td><td>Low jitter at rest, low lag when moving</td></tr>
+<tr><td>OS control</td><td>ctypes → user32 (mouse_event, keybd_event, WindowFromPoint, ShowWindow, PostMessage)</td><td>Clicks, keys, minimize, close. No extra deps</td></tr>
+<tr><td>Multi-monitor</td><td>screeninfo</td><td>Monitor geometry for cursor mapping</td></tr>
+<tr><td>UI</td><td>Tkinter + Pillow + NumPy</td><td>Click-through glowing status panel</td></tr>
+</table></div>
+
+<h2>Structure</h2>
+<div class="tbl"><table>
+<tr><th>File</th><th>Contents</th></tr>
+<tr><td><code>handmouse.py</code></td><td>Tuning knobs, pure gesture logic (<code>Gestures</code>, <code>Pinch</code>, <code>pose_of</code>, <code>ctrl_move</code>), filter, calibration, main loop</td></tr>
+<tr><td><code>widget.py</code></td><td>Desktop status panel: mode, last action, cheat sheet</td></tr>
+<tr><td><code>box.json</code> / <code>ctrl.json</code></td><td>Per-user calibration: active zone, Ctrl pose</td></tr>
+<tr><td><code>handmouse.bat</code></td><td>Launcher using local venv</td></tr>
+</table></div>
+
+<h2>Technical analysis</h2>
+<div class="tbl"><table>
+<tr><th>Decision</th><th>Why</th></tr>
+<tr><td>Scale-free ratios</td><td>Distances divided by hand size. Works near or far from camera.</td></tr>
+<tr><td>Hysteresis on pinch (0.30 on / 0.40 off)</td><td>Stops click flicker at the threshold edge.</td></tr>
+<tr><td>Pinch state machine</td><td>One thumb+middle signal yields click, right click, drag, scroll by timing.</td></tr>
+<tr><td>Hold timers (0.25–0.5 s)</td><td>Poses passed through mid-motion don't fire. Destructive close needs longest hold.</td></tr>
+<tr><td>Lookback buffer</td><td>Forming a fist moves the index. Action targets where cursor was 0.3 s before.</td></tr>
+<tr><td>Rule-based finger states</td><td>Up/down + thumb out/tucked. Angle-independent, no training data needed.</td></tr>
+<tr><td>Knuckle shape matching</td><td>Ctrl pose detected from palm knuckles only; folding fingers doesn't break it.</td></tr>
+<tr><td>Calibrated box</td><td>Small comfortable zone maps to full screen. Less arm fatigue.</td></tr>
+<tr><td>Thresholds from recorded takes</td><td>Real motion replayed through real functions before tuning.</td></tr>
+<tr><td>Pure logic + self-test</td><td><code>--test</code> asserts gestures without a webcam.</td></tr>
+</table></div>
+
+<h2>Limits</h2>
+<ul>
+<li>Windows only (Win32 calls).</li>
+<li>Right hand only; two-hand tracking proved unreliable.</li>
+<li>Needs decent light. Fatigue on long sessions (gorilla arm).</li>
+<li>Uses legacy <code>mouse_event</code>; <code>SendInput</code> is the upgrade path.</li>
+</ul>
+
+<p class="sub" style="margin-top:48px"><a href="https://github.com/">Source on GitHub</a> · MIT</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.log
+motions.json
+box.json
+ctrl.json
+*-attempt.json
+hand_landmarker.task
+LINKEDIN.md
