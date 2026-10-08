@@ -33,7 +33,7 @@ Index tip moves the cursor. Pinches click, drag and scroll. Poses minimize, clos
 ## Install (Windows 10/11, Python 3.10+ from python.org)
 
 ```bash
-setup.bat
+.\setup.bat
 ```
 
 Makes `.venv`, installs `requirements.txt`, downloads `hand_landmarker.task` (the MediaPipe hand model) and unpacks the Gumball sprites into `gumball\sprites_v2`. Safe to run twice.
@@ -41,9 +41,9 @@ Makes `.venv`, installs `requirements.txt`, downloads `hand_landmarker.task` (th
 ## Run
 
 ```bash
-handmouse.bat --calibrate
-handmouse.bat --ctrl
-handmouse.bat
+.\handmouse.bat --calibrate
+.\handmouse.bat --ctrl
+.\handmouse.bat
 ```
 
 `--calibrate` fits the active box to your camera, `--ctrl` teaches your sideways Ctrl pose. Both write local files (`box.json`, `ctrl.json`) that are not shared. Skip them to use the defaults.

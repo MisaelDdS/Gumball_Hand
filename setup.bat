@@ -18,4 +18,4 @@ if not exist gumball\sprites_v2\manifest.json (
 )
 
 echo.
-echo Done. Next: handmouse.bat --calibrate, then handmouse.bat --ctrl, then handmouse.bat
+echo Done. Next: .\handmouse.bat --calibrate, then .\handmouse.bat --ctrl, then .\handmouse.bat
