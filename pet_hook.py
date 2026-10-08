@@ -1,0 +1,9 @@
+"""Claude Code hook for the Gumball pet: `on` (UserPromptSubmit) marks this session busy, `off` (Stop) clears it."""
+import json
+import sys
+from pathlib import Path
+
+d = Path(r"C:\Users\misae\gumball\claude_busy")
+d.mkdir(parents=True, exist_ok=True)
+f = d / json.load(sys.stdin).get("session_id", "unknown")
+f.touch() if sys.argv[1] == "on" else f.unlink(missing_ok=True)

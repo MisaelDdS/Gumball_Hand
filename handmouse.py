@@ -3,6 +3,7 @@ pinch = clicks, thumb+pinky inside the box = next monitor, fist = minimize windo
 point the cursor at a window, raise middle + ring (open hand) to open it; any other pose cancels.
 Close: tip the hand flat (palm down) and curl the fingertips to the bottom of the palm, held CLOSE_HOLD s =
 close the window under the cursor. Tipping the hand flat alone freezes the cursor.
+Thin border round the active monitor: blue = mouse available, yellow = Ctrl only (Ctrl mode / lock).
 Red pulse on the active monitor's edge = your index tip left the box on that side.
 Thumbs-up (all four fingers folded, thumb out) = cursor and gestures freeze, so you can pull the hand away.
 Thumbs-up held LOCK_HOLD s = Ctrl lock on/off: Ctrl mode stays on with the normal upright hand, no cursor.
@@ -12,6 +13,7 @@ fingers up + thumb tucked across the palm = Ctrl+C, only index up = Ctrl+V, only
 only thumb straight up = Ctrl+D, short rock sign = Enter on release (no Ctrl);
 rock sign held SWITCH_HOLD s = window switcher, cursor live only while it is open.
 Ctrl lock also allows fist = minimize and flat + curl = close. Back to neutral (open hand, thumb out) to re-arm.
+While any hold is in progress (drag / scroll / lock / fist / rock / close) the border blends toward its colour.
 
 python handmouse.py          control the mouse + preview window
 python handmouse.py --view   preview only, mouse untouched
@@ -23,6 +25,7 @@ Esc in the preview window (or Ctrl+C in the terminal) quits.
 import ctypes
 import json
 import math
+import os
 import sys
 import time
 from collections import deque, namedtuple
@@ -162,6 +165,12 @@ class OneEuro:
         return self.x
 
 
+def mix(a, b, f):
+    """Colour a blended toward b by f (0..1), in 1/16 steps so the border only repaints when it visibly changes."""
+    f = round(min(max(f, 0), 1) * 16) / 16
+    return tuple(round(x + (y - x) * f) for x, y in zip(a, b))
+
+
 def palm_shape(lm):
     """Knuckles relative to the wrist, scaled by hand size: hand angle, independent of fingers."""
     o = lm[WRIST]
@@ -246,6 +255,7 @@ def selftest():
     assert pose_of([1, 0, 0, 1], THUMB_OUT - .1) == "point"  # thumb folded = not rock
     assert pose_of([1] * 4, THUMB_OUT + .1) == "point"  # open palm stays a normal cursor
     assert pose_of([1, 0, 0, 0], .1) == "fine" and pose_of([1, 0, 0, 0], THUMB_OUT + .1) == "fine"
+    assert mix((0, 0, 0), (160, 80, 16), .5) == (80, 40, 8) and mix((0, 0, 0), (9, 9, 9), 2) == (9, 9, 9) and mix((1, 1, 1), (9, 9, 9), -1) == (1, 1, 1)
     e = OneEuro()
     held = [e(i / 30, .5 + (.01 if i % 2 else -.01)) for i in range(60)]
     assert max(held[30:]) - min(held[30:]) < .006   # +-0.01 jitter at rest shrinks a lot
@@ -519,13 +529,26 @@ def main(control):
     ctrl_mode, ctrl_seen, ctrl_score = False, -99.0, 9.0
     move_raw, move_t, move_done = None, 0.0, True
     ctrl_lock, lock_done = False, False  # Ctrl lock: Ctrl mode with any hand angle, toggled by a long thumbs-up
-    from widget import Widget, GREY, BLUE, GREEN, AMBER, RED, PURPLE
+    from widget import Widget, GREY, BLUE, GREEN, RED, PURPLE, YELLOW
     ui, last = Widget(), ""  # Buddy-style desktop panel: current mode + last action
+    import subprocess  # Gumball overlay replaces the plain blue border; own process, so it can't stall tracking
+    pet = subprocess.Popen([sys.executable, str(Path(__file__).with_name("pet.py")), "--parent", str(os.getpid())],
+                           stdin=subprocess.PIPE, text=True)
+    pet_mood, scroll_dir = None, "down"
+
+    def tell(line):
+        """One line to Gumball: 'mood <state>' or 'event <action>'."""
+        try:
+            pet.stdin.write(line + "\n")
+            pet.stdin.flush()
+        except (OSError, ValueError):
+            pass  # pet closed: the hand mouse carries on without it
 
     def say(msg):
         nonlocal last
         print(msg)
         last = msg
+        tell("event " + msg.replace(" ", "_"))
 
     def cursor_at(then):
         return next(((x, y) for t, x, y in hist if t >= then), cur)
@@ -551,6 +574,7 @@ def main(control):
             cv2.rectangle(frame, (int(BOX[0] * w), int(BOX[1] * h)), (int(BOX[2] * w), int(BOX[3] * h)), (90, 90, 90), 1)
 
             sides = (0, 0, 0, 0)
+            tint = None  # (colour, 0..1): a hold in progress, the border blends toward it
             if res.hand_landmarks:
                 lm = res.hand_landmarks[0]
                 dist = lambda a, b: ((lm[a].x - lm[b].x) ** 2 + (lm[a].y - lm[b].y) ** 2) ** .5
@@ -573,6 +597,8 @@ def main(control):
                     say("ctrl lock on" if ctrl_lock else "ctrl lock off")
                 if pose_raw != "thumb":
                     lock_done = False
+                elif not lock_done:
+                    tint = (BLUE if ctrl_lock else YELLOW, (now - pose_t) / LOCK_HOLD)
 
                 # Ctrl mode: on the first frame the hand angle matches the pose captured by --ctrl (or locked)
                 if ctrl or ctrl_lock:
@@ -594,6 +620,8 @@ def main(control):
                     cur = cursor_at(now - CTRL_LOOKBACK)
                 if flat and curled:
                     shut_t0 = shut_t0 or now
+                    if not shut_done:
+                        tint = (GREEN, (now - shut_t0) / CLOSE_HOLD)
                     if now - shut_t0 > CLOSE_HOLD and not shut_done:
                         shut_done = True
                         say("close window")
@@ -615,6 +643,10 @@ def main(control):
                 pinched = mid_pinch.update(r_base if click_to == INDEX_MCP else r_mid)
                 # curling into a fist passes through a pinch; drop it instead of clicking
                 fire(gest.update(now, pinched) if pointing else gest.reset())
+                if gest.state in ("DOWN1", "DOWN2"):  # pinch held: turns green as drag / scroll gets close
+                    tint = (GREEN, (now - gest.t0) / HOLD)
+                elif gest.state in ("DRAG", "SCROLL"):
+                    tint = (GREEN, 1.0)
 
                 # index tip -> 0..1 inside the box, smoothed. off = cursor offset from the hand:
                 # fine mode grows it (cursor moves slower than the hand), normal movement shrinks it
@@ -649,6 +681,8 @@ def main(control):
                     user32.SetCursorPos(int(cur[0]), int(cur[1]))
 
                 # fist: minimize the window the cursor was on just before the curl dragged it away
+                if pose_raw == "fist" and not fist_done and not sw and (ctrl_lock or not ctrl_mode) and not flat:
+                    tint = (GREEN, (now - pose_t) / POSE_HOLD)
                 if stable == "fist" and not fist_done and not sw and (ctrl_lock or not ctrl_mode) and not flat:
                     fist_done = True
                     x, y = cursor_at(pose_t - FIST_LOOKBACK)
@@ -676,6 +710,9 @@ def main(control):
                     say("switcher open")
                     if control:
                         key("ctrl", "alt", "tab")  # sticky Alt+Tab, stays open without holding Alt
+
+                if not sw and pose_raw == "rock" and not flat:  # rock held: green as the switcher gets close
+                    tint = (GREEN, (now - pose_t) / (SWITCH_HOLD if ctrl_mode else POSE_HOLD))
 
                 ext = extended(lm)
 
@@ -707,6 +744,8 @@ def main(control):
                             key("ctrl", move_raw[-1])
 
                 if gest.state == "SCROLL":
+                    if abs(lm[MID_MCP].y - scroll_y) > .002:
+                        scroll_dir = "up" if lm[MID_MCP].y > scroll_y else "down"  # hand up = page down
                     scroll_acc += (lm[MID_MCP].y - scroll_y) * SCROLL_GAIN  # hand up = page moves up, like dragging it
                     ticks = int(scroll_acc / 40) * 40
                     if ticks and control:
@@ -742,12 +781,20 @@ def main(control):
                         f"  mon {mon_i + 1}/{len(mons)}  {fps:.0f} fps"
                         + ("" if control else "  VIEW ONLY"), (10, 25), cv2.FONT_HERSHEY_SIMPLEX, .6, (0, 255, 255), 2)
             m = mons[mon_i]
-            ui.warn.update(sides, (m.x, m.y, m.width, m.height))
+            # no borders or edge warnings: Gumball (pet.py) is the only on-screen overlay
+            mood = ("nohand" if not res.hand_landmarks else
+                    (("ctrl_lock" if ctrl_lock else "freeze") if lock_done else "arming") if pose_raw == "thumb" else
+                    "switcher" if sw else "ctrl_lock" if ctrl_lock else "ctrl" if ctrl_mode else
+                    "drag" if gest.state == "DRAG" else f"scroll_{scroll_dir}" if gest.state == "SCROLL" else
+                    "edge" if max(sides) else "slow" if pose_raw == "fine" else "point")
+            if mood != pet_mood:
+                pet_mood = mood
+                tell("mood " + mood)
             gesture = {"DRAG": "Dragging", "SCROLL": "Scrolling"}.get(gest.state, "Clicking")
             ui.show(*("No hand", GREY) if not res.hand_landmarks else
-                     ("Ctrl lock" + (f"  ·  unlock in {max(0, LOCK_HOLD - (now - pose_t)):.0f}s" if pose_raw == "thumb" else ""), AMBER)
+                     ("Ctrl lock" + (f"  ·  unlock in {max(0, LOCK_HOLD - (now - pose_t)):.0f}s" if pose_raw == "thumb" else ""), YELLOW)
                      if ctrl_lock else
-                     ("Ctrl mode", AMBER) if ctrl_mode else
+                     ("Ctrl mode", YELLOW) if ctrl_mode else
                      ("Switcher  ·  open hand picks", GREEN) if sw else
                      ("Flat  ·  curl to close", RED) if flat else
                      (f"Frozen  ·  Ctrl lock in {max(0, LOCK_HOLD - (now - pose_t)):.0f}s", GREY) if pose_raw == "thumb" else
@@ -766,6 +813,7 @@ def main(control):
             key("esc")
         cams.close()
         ui.close()
+        pet.terminate()
 
 
 if __name__ == "__main__":

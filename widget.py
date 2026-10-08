@@ -11,11 +11,12 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 ON_TOP = False  # False = sits on the desktop behind windows, like Buddy; True = floats above (still click-through)
 
 GREY, BLUE, GREEN, AMBER, RED, PURPLE = (120, 130, 160), (90, 150, 255), (80, 220, 140), (255, 180, 60), (255, 90, 90), (190, 120, 255)
+YELLOW = (255, 220, 40)
 CHEATS = [  # (gesture, what it does); None = divider
     ("Point", "move cursor"),
     ("Thumb + middle", "click · twice = right click"),
     ("", "hold = drag · tap+hold = scroll"),
-    ("Index only", "slow · thumb on index base = click"),
+    ("Index only", "slow · click on index base"),
     ("Thumb + pinky", "next monitor (in the box)"),
     ("Fist", "minimize window"),
     ("Rock sign", "switcher · open hand picks"),
@@ -131,6 +132,46 @@ class EdgeWarn:
         self.strips, self.mon = [], None
 
 
+class ModeBorder:
+    """Thin steady glow round the active monitor, coloured by mode (blue = mouse, yellow = Ctrl only).
+    Drawn once per colour / monitor change, then just sits there: no per-frame work."""
+    DEPTH, FALLOFF, PEAK = 12, 3.0, 0.8  # px strip, px fade, max opacity
+
+    def __init__(self, root):
+        self.root, self.strips, self.key = root, [], None
+
+    def update(self, color, mon):
+        """color: RGB tuple or None (no border). mon: (x, y, w, h) of the active monitor."""
+        if (color, mon) == self.key:
+            return
+        if color is None:
+            return self.hide()
+        if not self.key or mon != self.key[1]:  # new monitor: new windows; a colour change just repaints
+            self.build(mon)
+        self.key = (color, mon)
+        bgr = np.array(color[::-1], np.float32)
+        for s in self.strips:
+            img = np.empty(s.a.shape + (4,), np.uint8)
+            img[..., :3], img[..., 3] = bgr * s.a[..., None], s.a * 255  # premultiplied
+            s.push(img)
+
+    def build(self, mon):
+        self.hide()
+        x, y, w, h = mon
+        T = self.DEPTH
+        for sx, sy, sw, sh in [(0, 0, w, T), (0, h - T, w, T), (0, T, T, h - 2 * T), (w - T, T, T, h - 2 * T)]:
+            s = Strip(self.root, x + sx, y + sy, sw, sh, topmost=True)
+            ys, xs = np.mgrid[sy:sy + sh, sx:sx + sw].astype(np.float32) + 0.5
+            s.a = self.PEAK * np.exp(-np.minimum(np.minimum(ys, h - ys), np.minimum(xs, w - xs)) / self.FALLOFF)
+            s.win.deiconify()
+            self.strips.append(s)
+
+    def hide(self):
+        for s in self.strips:
+            s.destroy()
+        self.strips, self.key = [], None
+
+
 BOLD = ImageFont.truetype("segoeuib.ttf", 15)
 SMALL = ImageFont.truetype("segoeui.ttf", 13)
 
@@ -143,6 +184,7 @@ class Widget:
         self.root = tk.Tk()
         self.root.withdraw()
         self.win, self.key = None, None
+        self.border = ModeBorder(self.root)  # built first so the red warning stacks above it
         self.warn = EdgeWarn(self.root)
 
     def show(self, mode, color, last):
@@ -193,6 +235,7 @@ class Widget:
 
     def close(self):
         self.warn.hide()
+        self.border.hide()
         if self.win:
             self.win.destroy()
         self.root.destroy()
