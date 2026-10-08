@@ -12,6 +12,7 @@ import csv
 import ctypes
 import json
 import math
+import os
 import random
 import subprocess
 import sys
@@ -28,8 +29,11 @@ import numpy as np  # noqa: E402
 from PIL import Image, ImageFilter  # noqa: E402
 from widget import Strip, user32  # noqa: E402
 
-SPRITES = Path(r"C:\Users\misae\gumball\sprites_v2")
-BUSY = Path(r"C:\Users\misae\gumball\claude_busy")  # pet_hook.py: one file per Claude Code session mid-turn
+HERE = Path(__file__).resolve().parent
+SPRITES = Path(os.environ.get("GUMBALL_SPRITES") or HERE / "gumball" / "sprites_v2")  # setup.bat unpacks them there
+BUSY = HERE / "gumball" / "claude_busy"  # pet_hook.py: one file per Claude Code session mid-turn
+if not (SPRITES / "manifest.json").exists():
+    sys.exit(f"Gumball sprites not found in {SPRITES}. Run setup.bat (it unpacks assets\\gumball_sprites.zip).")
 GAMES = {"rocketleague.exe", "brawlhalla.exe"}       # add any game's exe here
 BROWSERS = ("chrome", "brave", "msedge", "firefox", "opera")  # media from these = a video (YouTube)
 SIZE = 0.55        # sprite scale at 100 % DPI (256 px canvas -> ~140 px)
@@ -191,7 +195,6 @@ def signals():
 
 def media():
     """media.ps1 prints the app ids of sessions playing right now, once a second."""
-    import os
     p = subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                           str(Path(__file__).with_name("media.ps1")), str(os.getpid())],
                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, creationflags=0x08000000)
