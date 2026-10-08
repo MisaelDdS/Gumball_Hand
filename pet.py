@@ -1,9 +1,11 @@
 """Gumball overlay for the hand mouse (the only on-screen overlay). Own process, launched by handmouse.py,
 so nothing here can stall gesture tracking. Click-through, per-pixel alpha (widget.Strip).
-Reacts to: games, dictation to Claude, Claude working, media playing, hand-mouse gestures (sent on stdin as
-'mood <name>' / 'event <name>'), windows: stands on the foreground window or the taskbar, rides it when it's
-dragged, wobbles when it's resized, falls when it's minimized/closed, gets squished when it's maximized,
-walks / jumps / long-jumps between windows and monitors, sits after a while, sleeps after a long while.
+Reacts to: games, media playing, hand-mouse gestures (sent on stdin as 'mood <name>' / 'event <name>'),
+windows: stands on the foreground window or the taskbar, rides it when it's dragged, falls when it's
+minimized/closed, gets squished when it's maximized, walks / jumps / long-jumps between windows and monitors,
+sits after a while, sleeps after a long while.
+He reacts calmly: after SETTLE s when you're calm, longer the more commands you chained in the last few
+seconds, so a quick Ctrl+D, Enter, ... shows only where it ends (see settle() / busy()).
 Eyes follow the cursor on every frame that has round open eyes. Sprites: sprites_v2/manifest.json.
   python pet.py [--parent PID] [--state <animation>]   (--state forces one, for testing)"""
 import csv
@@ -120,7 +122,7 @@ def perch(want, game_mon):
 
 # ---------------------------------------------------------------- activity signals (background threads)
 sig = {"claude": False, "dictate": False, "game": False, "game_mon": None, "media": None,
-       "mood": "nohand", "mood_t": time.time(), "events": deque()}
+       "mood": "nohand", "mood_t": time.time(), "events": deque(), "activity": deque(maxlen=64)}
 
 
 def mic_in_use():
@@ -200,14 +202,24 @@ def media():
 
 
 def hand():
-    """Lines from handmouse.py on stdin: 'mood drag' (current state) or 'event left_click' (one-off)."""
+    """Lines from handmouse.py on stdin: 'mood drag' (current state) or 'event left_click' (one-off).
+    Whatever counts as "you just did something" (a new gesture, a Ctrl shortcut; not clicks, not pointing,
+    not scroll up/down flips) is stamped into sig["activity"]: how busy you are decides how calm he stays."""
+    family = lambda m: "scroll" if m.startswith("scroll") else m  # noqa: E731
     for line in sys.stdin or ():
         kind, _, name = line.strip().partition(" ")
+        now = time.time()
+        with LOG.open("a") as log:
+            log.write(f"{now:.2f},{kind},{name}\n")
         if kind == "mood":
-            sig["mood"], sig["mood_t"] = name, time.time()
+            if name in GESTURES and name != "edge" and family(name) != family(sig["mood"]):
+                sig["activity"].append(now)
+            sig["mood"], sig["mood_t"] = name, now
             print("gumball:", name, file=sys.stderr, flush=True)  # shows in the hand mouse console
         elif kind == "event":
             sig["events"].append(name)
+            if name not in CLICKS:
+                sig["activity"].append(now)
 
 
 # ---------------------------------------------------------------- sprites
@@ -237,17 +249,29 @@ def squeezed(a):
     return min(widths) < 0.45 * max(widths)
 
 
-for _n in [n for n, a in ANIMS.items() if not a.loop and (n.endswith(("_in", "_out")) or n in ("sit_down", "stand_up", "drag_release"))
-           and squeezed(a)]:
-    del ANIMS[_n]  # ponytail: skipped -> crossfade; real transition clips with these names drop straight back in
+for _n in [n for n, a in ANIMS.items() if not a.loop and squeezed(a)]:
+    del ANIMS[_n]  # ponytail: skipped (transitions -> crossfade, reactions -> none); real clips with these names drop back in
 HUBS = ("idle", "idle_sit")
 SITTERS = {n for n, a in ANIMS.items() if a.loop and a.anchors[0] == HIP and n not in HUBS}  # their _in starts seated
 OUT = {"drag_hold": "drag_release",           # nicer way out than the generic _out
        "disgust": None}                       # dictation over: straight back, no reaction
 FACES_RIGHT = {"long_jump_air", "jump_air", "ride_window"}  # travel sprites: mirrored when he heads left
 SLIDE = 900        # px/s at 100 % DPI, sliding along the taskbar
-REACT_DELAY = 2.0  # s a command must stand before he reacts to it
 FADE = 0.15        # s crossfade between poses that have no transition clip
+# How calmly he reacts. Your detector treats ~0.3 s as the shortest deliberate hold (POSE_HOLD / THUMB_HOLD), so
+# anything shorter is a pose passed through. Beyond that the wait grows with how much you chained lately.
+SETTLE = 0.30      # s a gesture must stand before he reacts, when you're calm
+SETTLE_STEP = 0.25  # s added for every further command in the last BUSY_WINDOW s
+SETTLE_MAX = 1.5
+BUSY_WINDOW = 4.0
+EXIT_HOLD = 0.4    # s extra before he drops back to idle, so a hand blip doesn't bounce him
+SCROLL_FLIP = 0.8  # s a scroll direction must last before his scroll animation follows it
+SHOT_GAP = 1.2     # s minimum between two one-shot reactions (Ctrl+C, Enter...)
+CLICK_QUIET, CLICK_GAP = 3.0, 8.0  # clicks never stop: he flinches only after 3 s of nothing else, once per 8 s
+CLICKS = {"left_click", "right_click"}
+LOG = Path(__file__).with_name("gestures.log")  # timestamped moods/events from the hand mouse: real timing data
+if LOG.exists() and LOG.stat().st_size > 1_000_000:
+    LOG.write_text("")
 DIRECT = {("ctrl_lock_arming", "ctrl_locked")}  # arming ends in the locked pose: no detour through idle
 
 
@@ -262,6 +286,8 @@ GESTURES = {  # mood from handmouse -> loop
     "ctrl": pick("ctrl_mode"), "slow": pick("slow_mode"), "switcher": pick("switcher_open"),
     "edge": pick("hand_near_edge"),
 }
+GESTURE_ANIMS = set(GESTURES.values())
+CALM_ANIMS = {"idle", "idle_sit", "sit_taskbar", "sleep"}  # where he rests: reaching these = going back to idle
 EVENTS = {  # one-off from handmouse -> one-shot clip
     "left_click": "click_react", "right_click": "right_click_react", "ctrl+c": "ctrl_copy", "ctrl+v": "ctrl_paste",
     "ctrl+z": "ctrl_undo", "ctrl+d": "ctrl_d", "enter": "enter_press", "minimize": "minimize_react",
@@ -390,8 +416,9 @@ class Pet:
         self.loop, self.queue, self.dest, self.t0 = "idle", [], "idle", now  # playing: queued clips, then a loop
         self.want, self.want_t, self.perch_key, self.perch_t = "idle", 0.0, None, now
         self.moved_t, self.last_cur, self.fidget_t = now, None, now + 20
-        self.rect, self.ride_t, self.wobble_t = None, 0.0, 0.0
-        self.pend, self.pend_t, self.event, self.event_t = None, 0.0, None, 0.0
+        self.rect, self.ride_t = None, 0.0
+        self.pend, self.pend_t, self.event, self.shot_t = None, 0.0, None, 0.0  # event: (clip, "shot"|"click", t)
+        self.sdir, self.sdir_cand, self.sdir_t = None, None, 0.0
         self.shown, self.last_img, self.fade_from, self.fade_t = None, None, None, 0.0
 
     def wanted(self, now, perch_kind):
@@ -404,6 +431,14 @@ class Pet:
             return pick("pumped")
         if now - self.ride_t < 0.4:
             return pick("ride_window")
+        if m.startswith("scroll"):  # the hand strokes back and forth: follow a direction only once it lasts
+            if m != self.sdir_cand:
+                self.sdir_cand, self.sdir_t = m, now
+            if not self.sdir or now - self.sdir_t > SCROLL_FLIP:
+                self.sdir = self.sdir_cand
+            m = self.sdir
+        else:
+            self.sdir = None
         if m in GESTURES:
             return GESTURES[m]
         if sig["media"] == "dance":
@@ -418,6 +453,26 @@ class Pet:
         if still > SIT_AFTER:
             return pick("sit_taskbar" if perch_kind == "mon" else "idle_sit")
         return "idle"
+
+    @staticmethod
+    def busy(now):
+        """(commands in the last BUSY_WINDOW s, seconds a gesture must stand before he follows it)."""
+        n = sum(now - t < BUSY_WINDOW for t in list(sig["activity"]))
+        return n, min(SETTLE_MAX, SETTLE + SETTLE_STEP * max(0, n - 1))
+
+    def settle(self, now, want):
+        """Seconds `want` must stand before he follows it. Gestures: calm = SETTLE, longer the more you chained
+        (quick Ctrl+D, Enter, ... = he waits and shows only where it ends); back to idle = SETTLE + EXIT_HOLD.
+        Window dragging is physics (near-instant); games, music, hand lost are slow signals (fixed)."""
+        if want == pick("ride_window"):
+            return 0.25
+        if want == GESTURES["edge"]:
+            return SETTLE
+        if want in CALM_ANIMS:  # leaving a gesture: quick even when busy; a new gesture restarts the wait anyway
+            return SETTLE + EXIT_HOLD
+        if want in GESTURE_ANIMS:
+            return self.busy(now)[1]
+        return 0.5
 
     def start_move(self, now, old_key, new_key, x, y, dpi):
         """Plan the trip to the new perch as legs. To a taskbar: get down to the floor of the monitor he's on
@@ -506,13 +561,20 @@ class Pet:
         cur = cursor()
         if cur != self.last_cur:
             self.moved_t, self.last_cur = now, cur
-        while sig["events"]:  # clicks, Ctrl+letters...: only the last one counts
+        while sig["events"]:  # Ctrl+letters, Enter...: of a burst only the last one with a clip is kept
             e = sig["events"].popleft()
             clip = EVENTS.get(e) or ("monitor_switch" if e.startswith("monitor") else None)
-            self.event, self.event_t = (clip if clip in ANIMS else None), now
-        calm = now - max(self.event_t, sig["mood_t"]) > REACT_DELAY  # nothing new from you for 2 s
-        if self.event and calm and not self.queue and not self.move and ANIMS[self.loop].anchors[0] == FOOT:
-            self.queue, self.dest, self.t0, self.event = [self.event], self.loop, now, None  # one-shot, then back
+            if clip in ANIMS and not (e in CLICKS and self.event and self.event[1] == "shot"):  # clicks never replace a shot
+                self.event = (clip, "click" if e in CLICKS else "shot", now)
+        if self.event:
+            clip, kind, t = self.event
+            last = max(sig["activity"], default=0.0)
+            if now - t > 4:  # stale reaction: drop it
+                self.event = None
+            elif (now - last >= self.busy(now)[1] and now - self.shot_t >= SHOT_GAP if kind == "shot" else
+                  now - last >= CLICK_QUIET and now - t >= SETTLE and now - self.shot_t >= CLICK_GAP) \
+                    and not self.queue and not self.move and ANIMS[self.loop].anchors[0] == FOOT:
+                self.queue, self.dest, self.t0, self.event, self.shot_t = [clip], self.loop, now, None, now  # one-shot, then back
 
         game_mon = sig["game_mon"] or (self.force == pick("pumped") and user32.MonitorFromWindow(user32.GetForegroundWindow(), 2))
         key, x, y, dpi = perch("pumped" if sig["game"] or game_mon else "", game_mon)
@@ -521,13 +583,13 @@ class Pet:
                 self.pend, self.pend_t = key, now
             if now - self.pend_t < 0.3:
                 key, (x, y) = self.perch_key, self.pos  # stay put meanwhile
-        if key[0] == "win":  # the window under him: dragged -> ride it, resized -> wobble
+        if key[0] == "win":  # the window under him dragged along -> he rides it (a resize gets no reaction)
             r = window_rect(key[1])
             rect = (key, r.left, r.top, r.right - r.left, r.bottom - r.top)
-            if self.rect and self.rect[0] == key and rect != self.rect:
-                if max(abs(a - b) for a, b in zip(rect[3:], self.rect[3:])) >= 8:  # a real resize, not jitter
-                    self.wobble_t = now
-                else:
+            if self.rect and self.rect[0] == key:
+                moved = max(abs(a - b) for a, b in zip(rect[1:3], self.rect[1:3])) >= 2
+                resized = max(abs(a - b) for a, b in zip(rect[3:], self.rect[3:])) >= 8
+                if moved and not resized:
                     self.ride_t = now
             self.rect = rect
         if self.pos is None:
@@ -539,10 +601,7 @@ class Pet:
         want = self.wanted(now, key[0])
         if want != self.want:
             self.want, self.want_t = want, now
-        # react only once things settle: 2 s with no change (several commands in a row = only the last one
-        # shows); the window under him moving is physics, so that one is near-instant
-        delay = 0.25 if want in ("ride_window", "wobble_resize") else REACT_DELAY
-        stable = self.want if now - self.want_t > delay else self.dest
+        stable = self.want if now - self.want_t > self.settle(now, want) else self.dest  # calm: no flicker
 
         flip = False
         if self.move:
@@ -593,6 +652,8 @@ class Pet:
             if self.queue:
                 return self.frame(now, want)
             self.loop = want
+            if want == GESTURES["arming"]:  # lasts exactly as long as the 2 s thumbs-up hold: clock starts with the hold
+                self.t0 = max(sig["mood_t"], now - 1.5)
         if self.loop == want == "idle" and FIDGETS and now > self.fidget_t:  # now and then: look around, yawn
             self.fidget_t = now + random.uniform(20, 40)
             self.queue, self.dest, self.t0 = list(random.choice(FIDGETS)), "idle", now
